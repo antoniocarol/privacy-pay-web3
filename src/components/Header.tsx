@@ -14,9 +14,9 @@ export function Header() {
   };
 
   const menuItems = [
-    { title: 'Dashboard', path: '/' },
+    { title: 'Privacidade', path: '/' },
+    { title: 'Dashboard', path: '/dashboard' },
     { title: 'Transações', path: '/transactions' },
-    { title: 'Privacidade', path: '/privacy' },
     { title: 'Admin', path: '/admin' }
   ];
 
