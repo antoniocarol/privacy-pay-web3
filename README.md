@@ -1,80 +1,102 @@
-# PrivacyPay - Pagamentos Anônimos na Blockchain
+# PrivacyPay - Anonymous Blockchain Payments
 
 <div align="center">
   <img src="public/privacy-pay-logo.png" alt="PrivacyPay Logo" width="150" height="150" style="border-radius: 20px;" />
-
+  
   <p align="center">
-    <strong>O PayPal da Web3 - Pagamentos totalmente privados e anônimos usando o padrão eERC20 da Avalanche</strong>
+    <strong>The Web3 PayPal - Fully private and anonymous payments using Avalanche's eERC20 standard</strong>
   </p>
 </div>
 
-## Sobre o Projeto
+## About the Project
 
-PrivacyPay é uma plataforma descentralizada que permite transferências completamente privadas de ativos digitais na blockchain Avalanche. Utilizando o padrão de token eERC20 da Avalanche e tecnologias de zero-knowledge proofs, a PrivacyPay garante que os detalhes das transações - incluindo valores, remetentes e destinatários - permaneçam completamente privados.
+PrivacyPay is a **UI/UX design and frontend prototype** for a decentralized platform that enables completely private digital asset transfers on the Avalanche blockchain. This project serves as the **design foundation and user interface concept** for the [ChainPal project](https://github.com/antoniocarol/EncryptedERC/tree/main/chainpal-functional), providing a modern, intuitive user experience for private Web3 payments.
 
-### Principais Funcionalidades
+> **Note**: This is primarily a **UI/UX design project** showcasing how private blockchain payments could look and feel. The actual implementation logic is handled by the [ChainPal backend system](https://github.com/antoniocarol/EncryptedERC/tree/main/chainpal-functional) using EncryptedERC contracts and zero-knowledge proofs.
 
-- **Transações 100% Privadas**: Envie e receba tokens sem revelar valores ou endereços na blockchain
-- **Interface Amigável**: UX/UI moderna inspirada em aplicativos de fintech tradicionais
-- **Shield & Unshield**: Converta tokens públicos em privados e vice-versa
-- **Gestão de Notas Privadas**: Sistema seguro para gerenciamento de notas criptográficas
-- **Compatibilidade com Wallets**: Integração com MetaMask, Core Wallet e outras carteiras Web3
+Using Avalanche's eERC20 token standard and zero-knowledge proof technologies, PrivacyPay ensures that transaction details - including amounts, senders, and recipients - remain completely private.
 
-## Tecnologias Utilizadas
+### Key Features
+
+- **100% Private Transactions**: Send and receive tokens without revealing amounts or addresses on the blockchain
+- **User-Friendly Interface**: Modern UX/UI design inspired by traditional fintech applications
+- **Shield & Unshield**: Convert public tokens to private and vice versa
+- **Private Notes Management**: Secure system for managing cryptographic notes
+- **Wallet Compatibility**: Integration with MetaMask, Core Wallet, and other Web3 wallets
+- **Responsive Design**: Optimized for desktop and mobile experiences
+
+## Technologies Used
 
 - **Frontend**: React, TypeScript, Vite, TailwindCSS
 - **Web3**: ethers.js, wagmi, viem
 - **State Management**: Zustand, React Query
-- **Blockchain**: Avalanche C-Chain, Padrão eERC20
-- **Segurança**: Zero-knowledge proofs, criptografia AES avançada
+- **Blockchain**: Avalanche C-Chain, eERC20 Standard
+- **Security**: Zero-knowledge proofs, advanced AES encryption
+- **Design**: Modern fintech-inspired UI components
 
-## Documentação
+## Related Projects
 
-- [Roadmap de Desenvolvimento](./ROADMAP.md) - Status atual e plano de implementação
-- [Documentação de Implementação](./IMPLEMENTACAO.md) - Guia técnico de implementação
-- [Contrato EERC20Converter](./src/contracts/EERC20Converter.sol) - Smart contract para conversão eERC20
+This UI/UX project is designed to work with:
+- **[ChainPal](https://github.com/antoniocarol/EncryptedERC/tree/main/chainpal-functional)** - The backend implementation with smart contracts and ZK proofs
+- **EncryptedERC** - The core smart contract system for private tokens
 
-## Arquitetura do Sistema
+## Documentation
+
+- [Development Roadmap](./ROADMAP.md) - Current status and implementation plan
+- [Implementation Guide](./IMPLEMENTACAO.md) - Technical implementation guide
+- [EERC20Converter Contract](./src/contracts/EERC20Converter.sol) - Smart contract for eERC20 conversion
+
+## System Architecture
 
 ```
 ┌────────────┐       ┌────────────┐       ┌────────────┐
-│   Cliente  │──────▶│  Frontend  │◀─────▶│  Relayer   │
-│            │       │  React App │       │ (Opcional) │
+│   Client   │──────▶│  Frontend  │◀─────▶│  Relayer   │
+│            │       │  React App │       │ (Optional) │
 └────────────┘       └───────┬────┘       └──────┬─────┘
                             │                    │
        ┌───────────────────▶│◀───────────────────┘
        │                    ▼
 ┌──────┴──────┐      ┌────────────┐
-│  LocalStore │◀────▶│  Contrato  │
-│  (Secrets)  │      │   eERC20   │
+│  LocalStore │◀────▶│  eERC20    │
+│  (Secrets)  │      │  Contract  │
 └─────────────┘      └────────────┘
 ```
 
-## Conceitos de Privacidade
+## Privacy Concepts
 
-O sistema utiliza os seguintes conceitos criptográficos:
+The system utilizes the following cryptographic concepts:
 
-1. **Shield** - Converte tokens públicos em tokens privados (commitments)
-2. **Private Transfer** - Transfere tokens privados mantendo o anonimato
-3. **Unshield** - Converte tokens privados de volta para o formato público
+1. **Shield** - Converts public tokens into private tokens (commitments)
+2. **Private Transfer** - Transfers private tokens while maintaining anonymity
+3. **Unshield** - Converts private tokens back to public format
 
 ## Quick Start
 
 ```bash
-# Clone o repositório
-git clone https://github.com/seu-usuario/privacy-pay-web3.git
+# Clone the repository
+git clone https://github.com/your-username/privacy-pay-web3.git
 cd privacy-pay-web3
 
-# Instale as dependências
+# Install dependencies
+nvm use 21
 npm install
 
-# Configure o ambiente
+# Configure environment
 cp .env.example .env
-# Edite o .env com seu Contract Address e WalletConnect ID
+# Edit .env with your Contract Address and WalletConnect ID
 
-# Inicie o servidor de desenvolvimento
+# Start development server
 npm run dev
 ```
+
+## Design Philosophy
+
+This project focuses on creating an intuitive, accessible interface for private blockchain transactions. Key design principles include:
+
+- **Familiar UX**: Interface patterns similar to traditional payment apps
+- **Privacy First**: Clear visual indicators for private vs public transactions
+- **Progressive Disclosure**: Complex cryptographic operations hidden behind simple actions
+- **Trust Indicators**: Visual feedback for transaction privacy and security status
 
 ## Screenshots
 
@@ -82,18 +104,39 @@ npm run dev
   <img src="public/screenshots/dashboard.png" alt="PrivacyPay Dashboard" width="80%" />
 </div>
 
-## Licença
+## Project Status
 
-Este projeto está licenciado sob a licença MIT - veja o arquivo [LICENSE](LICENSE) para mais detalhes.
+🎨 **UI/UX Design**: Complete prototype with modern fintech-inspired interface
+🔧 **Frontend Implementation**: React components and Web3 integration
+🔗 **Backend Integration**: Designed to work with ChainPal's EncryptedERC system
+⚡ **Performance**: Optimized for smooth user experience
 
-## Créditos
+## Contributing
 
-Desenvolvido por [Seu Nome/Equipe](https://github.com/seu-usuario)
+This project welcomes contributions, especially in:
+- UI/UX improvements and accessibility
+- Frontend performance optimizations
+- Integration with ChainPal backend
+- Mobile responsiveness enhancements
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Credits
+
+Developed by [Corin & Pablexx](https://github.com/antoniocarol)
+
+Special thanks to the ChainPal team for the underlying privacy technology.
 
 ---
 
 <div align="center">
   <p>
-    <strong>⚠️ AVISO: Este projeto está em desenvolvimento e não deve ser usado em produção sem auditoria de segurança adequada ⚠️</strong>
+    <strong>⚠️ NOTICE: This is a UI/UX prototype and should not be used in production without proper security audit and backend implementation ⚠️</strong>
+  </p>
+  
+  <p>
+    <em>For the actual implementation with smart contracts and cryptographic proofs, see the <a href="https://github.com/antoniocarol/EncryptedERC/tree/main/chainpal-functional">ChainPal project</a></em>
   </p>
 </div>

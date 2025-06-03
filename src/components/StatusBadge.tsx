@@ -1,40 +1,39 @@
 import React from 'react';
 
-type StatusType = 'success' | 'warning' | 'danger' | 'info';
-
-interface StatusBadgeProps {
-  status: StatusType | string;
-  label: string;
-  className?: string;
+export interface StatusBadgeProps {
+  status: 'pending' | 'completed' | 'failed' | 'success' | 'privado';
+  label?: string;
 }
 
-export function StatusBadge({ status, label, className = '' }: StatusBadgeProps) {
-  // Mapeia o status para as classes corretas
-  const getStatusClasses = (status: string): string => {
-    switch (status.toLowerCase()) {
-      case 'success':
-      case 'confirmada':
-      case 'ativo':
-        return 'bg-green-500/20 text-green-500';
-      case 'warning':
-      case 'pendente':
-      case 'alerta':
-        return 'bg-yellow-500/20 text-yellow-500';
-      case 'danger':
-      case 'erro':
-      case 'falha':
-        return 'bg-red-500/20 text-red-400';
-      case 'info':
-      case 'privado':
-        return 'bg-primary/20 text-primary';
-      default:
-        return 'bg-white/10 text-white/70';
+export function StatusBadge({ status, label }: StatusBadgeProps) {
+  const statusConfig = {
+    pending: {
+      className: 'bg-yellow-100 text-yellow-800',
+      label: 'Pendente'
+    },
+    completed: {
+      className: 'bg-green-100 text-green-800',
+      label: 'Confirmada'
+    },
+    failed: {
+      className: 'bg-red-100 text-red-800',
+      label: 'Falhou'
+    },
+    success: {
+      className: 'bg-green-100 text-green-800',
+      label: 'Ativo'
+    },
+    privado: {
+      className: 'bg-primary/20 text-primary',
+      label: 'Privado'
     }
   };
 
+  const config = statusConfig[status];
+
   return (
-    <span className={`text-xs px-2 py-1 rounded-full ${getStatusClasses(status)} ${className}`}>
-      {label}
+    <span className={`text-sm px-2 py-1 rounded-full ${config.className}`}>
+      {label || config.label}
     </span>
   );
 } 

@@ -15,4 +15,15 @@ Object.defineProperty(window, 'ethereum', {
 vi.mock('@web3modal/wagmi/react', () => ({
   Web3Button: () => null,
   createWeb3Modal: vi.fn(),
+}));
+
+// Mock do Reown AppKit
+vi.mock('@reown/appkit-adapter-wagmi/react', () => ({
+  WagmiProvider: () => null,
+}));
+
+vi.mock('@reown/appkit/react', () => ({
+  AppKitContext: {
+    Provider: () => null,
+  },
 })); 

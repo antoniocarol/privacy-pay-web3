@@ -95,68 +95,85 @@ class CryptoService {
     secret: string;
   } {
     // Gera um nullifier único (usado para gastar o valor depois)
-    const nullifier = HmacSHA256(uuidv4(), userAddress).toString();
+    // Usar userAddress como parte do salt para o nullifier e secret o torna mais único por usuário
+    const nullifierSalt = `${userAddress}-${uuidv4()}`;
+    const nullifier = HmacSHA256(uuidv4(), nullifierSalt).toString();
     
     // Gera um segredo que só o dono conhecerá
-    const secret = HmacSHA256(uuidv4(), nullifier).toString();
+    const secretSalt = `${nullifier}-${uuidv4()}`;
+    const secret = HmacSHA256(uuidv4(), secretSalt).toString();
     
-    // Combina os valores para gerar o commitment (exemplo simplificado)
-    // Na implementação real, seria usado Poseidon hash ou outro algoritmo ZK-friendly
+    // Combina os valores para gerar o commitment
     const preimage = `${nullifier}:${secret}:${amount}`;
-    const commitment = HmacSHA256(preimage, userAddress).toString();
+    // Usar um salt/key diferente para o commitment, pode ser o próprio endereço ou um derivado
+    const commitment = HmacSHA256(preimage, userAddress).toString(); // userAddress como "key" para o Hmac
     
     return {
-      commitment,
-      nullifier,
-      secret
+      commitment: `0x${commitment}`,
+      nullifier: `0x${nullifier}`,
+      secret: `0x${secret}`
     };
   }
   
   /**
    * Gera dados para uma transação privada
-   * @param nullifier Nullifier da operação de shield anterior
-   * @param secret Segredo da operação de shield anterior
-   * @param amount Valor a ser transferido
-   * @param recipientAddress Destinatário (opcional para aumentar privacidade)
-   * @returns Dados para transação privada
+   * @param originalNote Objeto contendo nullifier, secret e amount da nota original
+   * @param transferAmount Valor a ser transferido
+   * @param recipientAddress Endereço do destinatário real
+   * @returns Objeto contendo dados para a nota do destinatário e dados da nota de troco
    */
   createPrivateTransferData(
-    nullifier: string, 
-    secret: string, 
-    amount: string,
-    recipientAddress?: string
+    originalNote: { nullifier: string; secret: string; amount: string; userAddress: string },
+    transferAmount: string,
+    recipientAddress: string // Endereço do destinatário real
   ): {
-    newCommitment: string;
-    transferData: string;
+    nullifierToSpend: string;
+    commitmentForRecipient: string;
+    secretForRecipient: string;
+    nullifierForRecipient: string;
+    changeNoteData?: { commitment: string; secret: string; nullifier: string; amount: string };
   } {
-    // Em uma implementação real, aqui seriam criados os parâmetros para ZK-SNARK
-    // com estrutura mais complexa conforme o protocolo da Avalanche
+    const { nullifier: originalNullifier, secret: originalSecret, amount: originalAmount, userAddress: senderAddress } = originalNote;
+    const bnTransferAmount = BigInt(transferAmount);
+    const bnOriginalAmount = BigInt(originalAmount);
+
+    if (bnTransferAmount <= 0n) {
+      throw new Error("Valor da transferência deve ser positivo.");
+    }
+    if (bnTransferAmount > bnOriginalAmount) {
+      throw new Error("Valor da transferência excede o valor da nota original.");
+    }
+
+    // 1. Dados para a nota do Destinatário
+    // O destinatário precisa de seu próprio secret e nullifier para sua nova nota.
+    // Usamos recipientAddress para derivar os segredos da nota do destinatário.
+    const recipientNoteData = this.generateShieldCommitment(transferAmount, recipientAddress);
     
-    // Cria um novo commitment para o destinatário (simplificado)
-    const newSecret = HmacSHA256(uuidv4(), secret).toString();
-    const newNullifier = HmacSHA256(uuidv4(), nullifier).toString();
-    
-    // Destinatário é opcional no protocolo de privacidade
-    const recipient = recipientAddress || 'private';
-    
-    const preimage = `${newNullifier}:${newSecret}:${amount}:${recipient}`;
-    const newCommitment = HmacSHA256(preimage, nullifier).toString();
-    
-    // Encripta os dados da transferência para o sistema de relayer
-    const transferData = this.encrypt(
-      JSON.stringify({
-        nullifier,
-        secret,
-        newCommitment,
-        amount,
-        recipient
-      }),
-      nullifier
-    );
-    
+    const commitmentForRecipient = recipientNoteData.commitment;
+    const secretForRecipient = recipientNoteData.secret;
+    const nullifierForRecipient = recipientNoteData.nullifier; // Este nullifier será usado pelo destinatário para gastar esta nota
+
+    // 2. Dados para a nota de Troco (se houver)
+    let changeNoteData: { commitment: string; secret: string; nullifier: string; amount: string } | undefined = undefined;
+    const changeAmount = bnOriginalAmount - bnTransferAmount;
+
+    if (changeAmount > 0n) {
+      // A nota de troco pertence ao remetente (senderAddress)
+      const senderChangeNote = this.generateShieldCommitment(changeAmount.toString(), senderAddress);
+      changeNoteData = {
+        commitment: senderChangeNote.commitment,
+        secret: senderChangeNote.secret,
+        nullifier: senderChangeNote.nullifier,
+        amount: changeAmount.toString(),
+      };
+    }
+
     return {
-      newCommitment,
-      transferData
+      nullifierToSpend: originalNullifier, // O nullifier da nota original que está sendo gasta
+      commitmentForRecipient,          // O commitment que será registrado no contrato para o destinatário
+      secretForRecipient,              // O secret para o destinatário gastar a nota acima (logar por enquanto)
+      nullifierForRecipient,           // O nullifier para o destinatário gastar a nota acima (logar por enquanto)
+      changeNoteData                   // Dados da nota de troco para o remetente (se houver)
     };
   }
 }

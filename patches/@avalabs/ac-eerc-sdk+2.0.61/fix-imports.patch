@@ -1,0 +1,5 @@
+import { useReadContract as useContractRead, useReadContracts as useContractReads } from 'wagmi';
+import { erc20Abi as erc20ABI } from 'viem';
+import { EERC } from './EERC';
+
+export { erc20ABI, EERC, useContractRead, useContractReads }; 

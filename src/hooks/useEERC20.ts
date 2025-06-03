@@ -1,425 +1,464 @@
-import { useState, useCallback } from 'react';
-import { useAccount } from 'wagmi';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useContract } from '../services/contract';
-import { cryptoService } from '../services/crypto';
-import { useToast } from '../providers/ToastProvider';
-import { useLocalStorage } from './useLocalStorage';
+import { useState } from "react";
+import { useAccount, usePublicClient, useWalletClient } from "wagmi";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useContract } from "../services/contract";
+import { postSendEncryptedNote, postUnshield, getEncryptedNotes, EncryptedNoteResponse } from "../services/relayerClient";
+import { cryptoService } from "../services/crypto";
+import { useToast } from "../providers/ToastProvider";
+import { useLocalStorage } from "./useLocalStorage";
+import { SupportedToken } from "@/config/tokens";
+import { erc20Abi } from 'viem';
+import { encryptDataForRecipient, decryptSealedBoxData } from '@/services/encryptionService';
 
-// Configuração
-const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS;
+/** Endereço do contrato Converter implantado na rede */
+// const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS as `0x${string}`; // Comentado pois não é usado diretamente aqui agora
 
-// Tipos para o armazenamento local de dados privados
-interface SecretData {
+/** Estrutura persistida no localStorage para cada nota privada */
+export interface SecretData {
   nullifier: string;
   secret: string;
-  amount: string;
+  amount: string; // 1 USDC = "1000000" (6 dec)
   commitment: string;
   timestamp: number;
   spent: boolean;
+  tokenSymbol: string;
+  converterAddress: string;
+  decimals: number;
 }
 
-interface ShieldParams {
-  amount: string;
-}
-
-interface TransferParams {
-  amount: string;
-  recipient: string;
-  secretId: string;
-}
-
-interface UnshieldParams {
-  amount: string;
-  secretId: string;
-}
-
-/**
- * Hook personalizado para operações eERC20 (shield, transfer, unshield)
- * Gerencia estados locais de segredos e operações com o contrato eERC20
- */
-export function useEERC20() {
+export function useEERC20(tokenCfg?: SupportedToken) {
   const { address } = useAccount();
-  const { getContract } = useContract();
+  const publicClient = usePublicClient();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
-  
-  // Armazenamento local de commitments e segredos (em produção deveria usar criptografia mais forte)
+  const { data: walletClient } = useWalletClient();
+
+  const { getContract, getErc20, EERC20_CONVERTER_ABI, AVAX_CONVERTER_ABI } = useContract();
+
+  /* ------------------------------------------------------------------
+   * Local storage (compromissos não gastos)
+   * ----------------------------------------------------------------*/
   const [secretStore, setSecretStore] = useLocalStorage<Record<string, SecretData>>(
-    'privacy-pay-secrets', 
-    {}
+    "privacy-pay-secrets",
+    {},
   );
-  
-  // Estados locais para transações em andamento
+
+  /* ------------------------------------------------------------------
+   * Flags de UI
+   * ----------------------------------------------------------------*/
   const [isShielding, setIsShielding] = useState(false);
   const [isTransferring, setIsTransferring] = useState(false);
   const [isUnshielding, setIsUnshielding] = useState(false);
-  
-  // Busca o saldo total privado (secrets não gastos)
-  const { data: privateBalance, refetch: refetchBalance } = useQuery({
-    queryKey: ['private-balance', address],
+  const [isFetchingNotes, setIsFetchingNotes] = useState(false);
+
+  /* ------------------------------------------------------------------
+   * Saldo privado (somando notas não gastas)
+   * ----------------------------------------------------------------*/
+  const { data: privateBalance } = useQuery({
+    queryKey: ["private-balance", address, secretStore, tokenCfg?.symbol],
     queryFn: () => {
-      if (!address || !secretStore) return '0';
-      
-      // Calcula o saldo somando todos os secrets não gastos
-      const availableSecrets = Object.values(secretStore)
-        .filter(secret => !secret.spent && secret.timestamp > Date.now() - (90 * 24 * 60 * 60 * 1000)); // 90 dias
-      
-      // Soma os valores
-      const total = availableSecrets.reduce(
-        (sum, secret) => sum + parseFloat(secret.amount), 
-        0
-      );
-        
-      return total.toString();
+      if (!address || !tokenCfg) return "0";
+      const sum = Object.values(secretStore)
+        .filter((n) => !n.spent && n.tokenSymbol === tokenCfg.symbol && n.converterAddress === tokenCfg.converter)
+        .reduce((s, n) => s + BigInt(n.amount), 0n); 
+      return sum.toString();
     },
-    enabled: !!address,
+    enabled: !!address && !!tokenCfg,
   });
 
-  // Busca o token ERC20 subjacente
+  /* ------------------------------------------------------------------
+   * Token subjacente
+   * ----------------------------------------------------------------*/
+  const underlyingAddress = tokenCfg?.erc20;
+
   const { data: underlyingToken } = useQuery({
-    queryKey: ['underlying-token', address],
+    queryKey: ["underlying-token", tokenCfg?.symbol, tokenCfg?.converter],
     queryFn: async () => {
-      if (!address) return null;
-      const contract = getContract();
-      
-      try {
-        // Obtém o endereço do token subjacente
-        const underlyingAddress = await contract.read.underlying();
-        return underlyingAddress;
-      } catch (error) {
-        console.error('Erro ao buscar token subjacente:', error);
-        return null;
-      }
+      if (!tokenCfg) return null;
+      if (tokenCfg.isNative) return '0xNATIVE';
+      if (tokenCfg.erc20 && tokenCfg.erc20 !== '0xNATIVE') return tokenCfg.erc20;
+      // Se não for nativo e não tiver erc20 definido, tenta ler do contrato EERC20Converter
+      const converterContract = getContract(tokenCfg.converter, EERC20_CONVERTER_ABI) as any;
+      return converterContract.read.underlying();
     },
-    enabled: !!address,
+    enabled: !!tokenCfg,
+    staleTime: Infinity,
   });
-  
-  // Retorna todos os secrets disponíveis (não gastos)
-  const getAvailableSecrets = useCallback(() => {
-    if (!secretStore) return [];
-    
-    return Object.entries(secretStore)
-      .filter(([_, data]) => !data.spent)
-      .map(([id, data]) => ({
-        id,
-        ...data
-      }));
-  }, [secretStore]);
-  
-  /**
-   * Exporta todos os segredos em formato criptografado
-   * @returns String criptografada contendo todos os segredos
-   */
-  const exportSecrets = useCallback(() => {
-    if (!address) throw new Error('Wallet não conectada');
-    if (Object.keys(secretStore).length === 0) throw new Error('Nenhuma nota para exportar');
-    
-    try {
-      // Criptografa os dados usando o endereço da carteira como chave
-      const exportData = cryptoService.encrypt(
-        JSON.stringify(secretStore),
-        address
-      );
-      
-      // Adiciona prefixo para identificar dados do PrivacyPay
-      return `PRIVACYPAY:${exportData}`;
-    } catch (error) {
-      console.error('Erro ao exportar segredos:', error);
-      throw new Error('Falha ao exportar notas privadas');
-    }
-  }, [address, secretStore]);
-  
-  /**
-   * Importa segredos de uma string criptografada
-   * @param importData String criptografada contendo segredos
-   */
-  const importSecrets = useCallback((importData: string) => {
-    if (!address) throw new Error('Wallet não conectada');
-    
-    try {
-      // Verifica o prefixo
-      if (!importData.startsWith('PRIVACYPAY:')) {
-        throw new Error('Formato de dados inválido');
-      }
-      
-      // Remove o prefixo
-      const encryptedData = importData.replace('PRIVACYPAY:', '');
-      
-      // Descriptografa os dados
-      const decryptedData = cryptoService.decrypt(encryptedData, address);
-      if (!decryptedData) throw new Error('Falha ao descriptografar dados');
-      
-      // Converte para objeto
-      const importedSecrets = JSON.parse(decryptedData);
-      
-      // Atualiza o armazenamento local
-      setSecretStore(importedSecrets);
-      
-      // Atualiza o saldo
-      queryClient.invalidateQueries({ queryKey: ['private-balance', address] });
-      
-      return true;
-    } catch (error) {
-      console.error('Erro ao importar segredos:', error);
-      throw new Error('Falha ao importar notas privadas');
-    }
-  }, [address, queryClient, setSecretStore]);
-  
-  /**
-   * Aprovação de tokens para o contrato converter (requisito para shield)
-   */
+
+  /* ------------------------------------------------------------------
+   * Approve (executado no token)
+   * ----------------------------------------------------------------*/
   const approveTokens = useMutation({
-    mutationFn: async ({ amount }: { amount: string }) => {
-      if (!address) throw new Error('Wallet não conectada');
-      
-      try {
-        const contract = getContract();
-        
-        // Approve tokens para o contrato
-        const tx = await contract.write.approve([
-          CONTRACT_ADDRESS,  // spender (o próprio contrato)
-          amount            // quantidade
-        ]);
-        
-        return tx.hash;
-      } catch (error) {
-        console.error('Erro na aprovação:', error);
-        throw new Error(`Falha ao aprovar tokens: ${(error as Error).message}`);
+    mutationFn: async (amount: string) => {
+      if (!tokenCfg || tokenCfg.isNative) return; // Não aprova para nativo
+      if (!address) throw new Error("Wallet não conectada");
+      if (!underlyingToken || underlyingToken === '0xNATIVE') throw new Error("Token subjacente indefinido para aprovação");
+      if (!tokenCfg.converter) throw new Error("Endereço do conversor não definido para aprovação");
+      if (!walletClient || !walletClient.account || !walletClient.chain) {
+        throw new Error("Wallet client não está totalmente configurado para approve");
       }
-    }
+
+      const hash = await walletClient.writeContract({
+        address: underlyingToken as `0x${string}`, // Endereço do token ERC20
+        abi: erc20Abi, // ABI padrão do ERC20
+        functionName: 'approve',
+        args: [tokenCfg.converter, BigInt(amount)], // spender, amount
+        chain: walletClient.chain,
+        account: walletClient.account,
+      });
+
+      await publicClient?.waitForTransactionReceipt({ hash });
+      return hash;
+    },
   });
-  
-  /**
-   * Operação shield - converte tokens públicos em privados
-   */
+
+  /* ------------------------------------------------------------------
+   * SHIELD
+   * ----------------------------------------------------------------*/
   const shield = useMutation({
-    mutationFn: async ({ amount }: ShieldParams) => {
-      if (!address) throw new Error('Wallet não conectada');
+    mutationFn: async ({ amount }: { amount: string }) => {
+      if (!address || !walletClient) throw new Error("Wallet não conectada");
+      if (!tokenCfg) throw new Error("Configuração do token não fornecida para shield");
       setIsShielding(true);
-      
       try {
-        const contract = getContract();
+        if (!tokenCfg.isNative) {
+          showToast("Aprovando tokens…", "info");
+          await approveTokens.mutateAsync(amount); 
+        }
+
+        const { commitment, nullifier, secret } = cryptoService.generateShieldCommitment(amount, address);
+        showToast("Enviando shield…", "info");
+
+        let txHash: `0x${string}`;
+        if (tokenCfg.isNative) {
+          if (!walletClient.chain) throw new Error("Chain não definida no walletClient");
+          if (!walletClient.account) throw new Error("Account não definida no walletClient");
+          if (!AVAX_CONVERTER_ABI) throw new Error("ABI do AVAX Converter não carregado");
+          if (!tokenCfg.converter) throw new Error("Endereço do AVAX Converter não definido em tokenCfg");
+
+          txHash = await walletClient.writeContract({
+            address: tokenCfg.converter, 
+            abi: AVAX_CONVERTER_ABI,     
+            functionName: 'shield',
+            args: [commitment],          
+            value: BigInt(amount),
+            chain: walletClient.chain,
+            account: walletClient.account,
+          });
+        } else {
+          if (!EERC20_CONVERTER_ABI) throw new Error("ABI do EERC20 Converter não carregado");
+          if (!tokenCfg.converter) throw new Error("Endereço do EERC20 Converter não definido em tokenCfg");
+          
+          // Para ERC20, usamos o EERC20_CONVERTER_ABI
+          // A função shield do EERC20Converter espera (amount, commitment)
+          // Precisamos chamar writeContract diretamente aqui também para consistência ou usar o helper getContract.
+          // Usando writeContract diretamente:
+          txHash = await walletClient.writeContract({
+            address: tokenCfg.converter,
+            abi: EERC20_CONVERTER_ABI,
+            functionName: 'shield',
+            args: [BigInt(amount), commitment], // amount deve ser BigInt aqui também
+            chain: walletClient.chain,       // Adicionar chain e account
+            account: walletClient.account,
+          });
+        }
         
-        // Primeiro, aprova os tokens
-        showToast('Aprovando tokens para o contrato...', 'info');
-        await approveTokens.mutateAsync({ amount });
-        
-        // Gera um commitment para o shield
-        const { commitment, nullifier, secret } = 
-          cryptoService.generateShieldCommitment(amount, address);
-        
-        // Enviar transação shield para o contrato
-        showToast('Enviando transação shield...', 'info');
-        const tx = await contract.write.shield([amount, commitment]);
-        
-        // Salva os segredos localmente para uso futuro
-        const secretId = `${nullifier.substring(0, 8)}-${Date.now()}`;
-        setSecretStore(prev => ({
+        await publicClient?.waitForTransactionReceipt({ hash: txHash });
+
+        const secretId = `${nullifier.slice(0, 8)}-${Date.now()}`;
+        setSecretStore((prev) => ({
           ...prev,
-          [secretId]: {
-            nullifier,
-            secret,
-            amount,
-            commitment,
-            timestamp: Date.now(),
-            spent: false
-          }
+          [secretId]: { 
+            nullifier, 
+            secret, 
+            amount, 
+            commitment, 
+            timestamp: Date.now(), 
+            spent: false, 
+            tokenSymbol: tokenCfg.symbol,
+            converterAddress: tokenCfg.converter as string,
+            decimals: tokenCfg.decimals
+          },
         }));
-        
-        return {
-          txHash: tx.hash,
-          secretId
-        };
+        return { txHash, secretId } as const;
       } finally {
         setIsShielding(false);
       }
     },
-    onSuccess: (data) => {
-      showToast(`Tokens protegidos com sucesso! ID da nota: ${data.secretId}`, 'success');
-      queryClient.invalidateQueries({ queryKey: ['private-balance', address] });
+    onSuccess: ({ secretId }) => {
+      showToast(`Shield concluído! ID: ${secretId}`, "success");
+      queryClient.invalidateQueries({ queryKey: ["private-balance", address] });
+      queryClient.invalidateQueries({ queryKey: ["history", address] });
     },
-    onError: (error) => {
-      showToast(`Erro ao proteger tokens: ${(error as Error).message}`, 'error');
-    }
+    onError: (e) => showToast((e as Error).message, "error"),
   });
-  
-  /**
-   * Transferência privada entre carteiras
-   */
+
+  /* ------------------------------------------------------------------
+   * PRIVATE TRANSFER via Relayer
+   * ----------------------------------------------------------------*/
   const privateTransfer = useMutation({
-    mutationFn: async ({ amount, recipient, secretId }: TransferParams) => {
-      if (!address) throw new Error('Wallet não conectada');
-      if (!secretStore[secretId]) throw new Error('Nota privada não encontrada');
-      
+    mutationFn: async ({ secretId, amount, recipient, recipientEncKey }: { 
+      secretId: string; 
+      amount: string; 
+      recipient: string; // Este é o recipientWalletAddress
+      recipientEncKey: string; 
+    }) => {
+      if (!address) throw new Error("Wallet não conectada");
+      if (!tokenCfg || !tokenCfg.converter) throw new Error("Token ou conversor não configurado para esta operação.");
+
+      const note = secretStore[secretId];
+      if (!note) throw new Error("Nota não encontrada");
+      if (note.spent) throw new Error("Nota já gasta");
+      if (BigInt(amount) > BigInt(note.amount)) throw new Error("Valor da transferência excede o valor da nota.");
+      if (note.converterAddress !== tokenCfg.converter) {
+        throw new Error("A nota selecionada não pertence ao conversor do token atualmente selecionado para a transferência.");
+      }
+
       setIsTransferring(true);
-      
       try {
-        const contract = getContract();
-        const secretData = secretStore[secretId];
-        
-        // Verifica se o secret já foi gasto
-        if (secretData.spent) {
-          throw new Error('Esta nota já foi gasta');
-        }
-        
-        // Verifica se o valor é suficiente
-        if (parseFloat(secretData.amount) < parseFloat(amount)) {
-          throw new Error('Saldo insuficiente na nota selecionada');
-        }
-        
-        // Cria os dados para a transferência privada
-        const { nullifier, secret } = secretData;
-        const { newCommitment, transferData } = cryptoService.createPrivateTransferData(
-          nullifier,
-          secret,
-          amount,
-          recipient
-        );
-        
-        showToast('Enviando transação privada...', 'info');
-        // Envia a transação para o relayer (simulado para MVP)
-        // Em produção, isso enviaria para um serviço Relayer externo
-        const tx = await contract.write.privateTransfer([nullifier, newCommitment]);
-        
-        // Marca o secret atual como gasto
-        setSecretStore(prev => ({
-          ...prev,
-          [secretId]: {
-            ...prev[secretId],
-            spent: true
-          }
-        }));
-        
-        // Se houver troco, cria um novo secret para o remetente
-        const change = parseFloat(secretData.amount) - parseFloat(amount);
-        if (change > 0) {
-          const changeSecretId = `change-${Date.now()}`;
-          const changeCommitment = cryptoService.generateShieldCommitment(
-            change.toString(), 
-            address
-          );
-          
-          setSecretStore(prev => ({
-            ...prev,
-            [changeSecretId]: {
-              nullifier: changeCommitment.nullifier,
-              secret: changeCommitment.secret,
-              amount: change.toString(),
-              commitment: changeCommitment.commitment,
-              timestamp: Date.now(),
-              spent: false
-            }
-          }));
-        }
-        
-        return {
-          txHash: tx.hash
+        const originalNoteData = {
+          nullifier: note.nullifier,
+          secret: note.secret,
+          amount: note.amount,
+          userAddress: address, 
         };
+
+        const transferResult = cryptoService.createPrivateTransferData(originalNoteData, amount, recipient);
+
+        const noteDataForRecipient = {
+          secret: transferResult.secretForRecipient,
+          nullifier: transferResult.nullifierForRecipient,
+          amount: amount, 
+          tokenSymbol: note.tokenSymbol,
+          decimals: note.decimals,
+          converterAddress: note.converterAddress,
+          commitment: transferResult.commitmentForRecipient 
+        };
+
+        const encryptedNotePayload = encryptDataForRecipient(noteDataForRecipient, recipientEncKey);
+
+        if (!encryptedNotePayload) {
+          throw new Error("Falha ao encriptar os dados da nota para o destinatário.");
+        }
+
+        showToast("Enviando transação e dados encriptados ao relayer…", "info");
+        
+        // Chamar o novo endpoint do relayer
+        const txHash = await postSendEncryptedNote({
+          recipientWalletAddress: recipient, // O `recipient` aqui é o endereço da carteira do destinatário
+          encryptedNotePayload: encryptedNotePayload,
+          commitmentForRecipient: transferResult.commitmentForRecipient,
+          nullifierToSpend: transferResult.nullifierToSpend,
+          converterAddress: note.converterAddress
+        });
+        
+        await publicClient?.waitForTransactionReceipt({ hash: txHash });
+
+        setSecretStore((prev) => {
+          const copy = { ...prev };
+          copy[secretId].spent = true; // Marca a nota original como gasta
+          
+          // Adiciona a nota de troco para o remetente, se houver
+          if (transferResult.changeNoteData) {
+            const { commitment, secret, nullifier, amount: changeAmount } = transferResult.changeNoteData;
+            const changeNoteId = `change-${note.tokenSymbol}-${Date.now()}`;
+            
+            const newChangeNote: SecretData = {
+              nullifier,
+              secret,
+              commitment,
+              amount: changeAmount,
+              timestamp: Date.now(),
+              spent: false,
+              tokenSymbol: note.tokenSymbol, // Troco é do mesmo token
+              converterAddress: note.converterAddress, // Mesmo conversor
+              decimals: note.decimals // Mesmas decimais
+            };
+            copy[changeNoteId] = newChangeNote;
+          }
+          return copy;
+        });
+        return { txHash } as const;
       } finally {
         setIsTransferring(false);
       }
     },
     onSuccess: () => {
-      showToast('Transferência privada realizada com sucesso!', 'success');
-      queryClient.invalidateQueries({ queryKey: ['private-balance', address] });
+      showToast("Transferência privada concluída", "success");
+      queryClient.invalidateQueries({ queryKey: ["private-balance", address] });
+      queryClient.invalidateQueries({ queryKey: ["history", address] });
     },
-    onError: (error) => {
-      showToast(`Erro na transferência: ${(error as Error).message}`, 'error');
-    }
+    onError: (e) => showToast((e as Error).message, "error"),
   });
-  
-  /**
-   * Operação unshield - converte tokens privados de volta para públicos
-   */
+
+  /* ------------------------------------------------------------------
+   * UNSHIELD via Relayer
+   * ----------------------------------------------------------------*/
   const unshield = useMutation({
-    mutationFn: async ({ amount, secretId }: UnshieldParams) => {
-      if (!address) throw new Error('Wallet não conectada');
-      if (!secretStore[secretId]) throw new Error('Nota privada não encontrada');
-      
+    mutationFn: async ({ secretId, amount }: { secretId: string; amount: string }) => {
+      if (!address) throw new Error("Wallet não conectada");
+      const note = secretStore[secretId];
+      if (!note) throw new Error("Nota não encontrada");
+      if (note.spent) throw new Error("Nota já gasta");
+      if (Number(note.amount) < Number(amount)) throw new Error("Saldo insuficiente");
+
       setIsUnshielding(true);
-      
       try {
-        const contract = getContract();
-        const secretData = secretStore[secretId];
-        
-        // Verifica se o secret já foi gasto
-        if (secretData.spent) {
-          throw new Error('Esta nota já foi gasta');
-        }
-        
-        // Verifica se o valor é suficiente
-        if (parseFloat(secretData.amount) < parseFloat(amount)) {
-          throw new Error('Saldo insuficiente na nota selecionada');
-        }
-        
-        // Envia a transação unshield
-        const { nullifier } = secretData;
-        showToast('Enviando transação unshield...', 'info');
-        const tx = await contract.write.unshield([nullifier, address, amount]);
-        
-        // Marca o secret como gasto
-        setSecretStore(prev => ({
-          ...prev,
-          [secretId]: {
-            ...prev[secretId],
-            spent: true
+        showToast("Enviando unshield…", "info");
+        const txHash = await postUnshield({ 
+          nullifier: note.nullifier, 
+          recipient: address, 
+          amount: amount.toString(), 
+          converterAddress: note.converterAddress
+        });
+        await publicClient?.waitForTransactionReceipt({ hash: txHash });
+
+        setSecretStore((prev) => {
+          const copy = { ...prev };
+          copy[secretId].spent = true;
+          const change = BigInt(note.amount) - BigInt(amount);
+          if (change > 0n) {
+            const c = cryptoService.generateShieldCommitment(change.toString(), address);
+            const changeNoteId = `unshield-change-${Date.now()}`;
+            copy[changeNoteId] = { 
+              ...c, 
+              amount: change.toString(), 
+              timestamp: Date.now(), 
+              spent: false,
+              tokenSymbol: note.tokenSymbol,
+              converterAddress: note.converterAddress,
+              decimals: note.decimals
+            };
           }
-        }));
-        
-        // Se houver troco, cria um novo secret para o usuário
-        const change = parseFloat(secretData.amount) - parseFloat(amount);
-        if (change > 0) {
-          const changeSecretId = `change-${Date.now()}`;
-          const changeCommitment = cryptoService.generateShieldCommitment(
-            change.toString(), 
-            address
-          );
-          
-          setSecretStore(prev => ({
-            ...prev,
-            [changeSecretId]: {
-              nullifier: changeCommitment.nullifier,
-              secret: changeCommitment.secret,
-              amount: change.toString(),
-              commitment: changeCommitment.commitment,
-              timestamp: Date.now(),
-              spent: false
-            }
-          }));
-        }
-        
-        return {
-          txHash: tx.hash
-        };
+          return copy;
+        });
+        return { txHash } as const;
       } finally {
         setIsUnshielding(false);
       }
     },
     onSuccess: () => {
-      showToast('Tokens recuperados com sucesso para sua carteira pública!', 'success');
-      queryClient.invalidateQueries({ queryKey: ['private-balance', address] });
+      showToast("Unshield concluído! Tokens públicos recebidos", "success");
+      queryClient.invalidateQueries({ queryKey: ["private-balance", address] });
     },
-    onError: (error) => {
-      showToast(`Erro ao recuperar tokens: ${(error as Error).message}`, 'error');
-    }
+    onError: (e) => showToast((e as Error).message, "error"),
   });
-  
-  // Exporta as funcionalidades do hook
+
+  /* ------------------------------------------------------------------
+   * FETCH AND PROCESS ENCRYPTED NOTES (para o destinatário)
+   * ----------------------------------------------------------------*/
+  const fetchAndProcessEncryptedNotes = useMutation({
+    mutationFn: async () => {
+      if (!address) throw new Error("Wallet não conectada para buscar notas.");
+      setIsFetchingNotes(true);
+      let notesProcessedCount = 0;
+      let notesFailedCount = 0;
+      try {
+        showToast("Buscando novas notas privadas...", "info");
+        const encryptedNotesFromRelayer = await getEncryptedNotes(address);
+
+        if (encryptedNotesFromRelayer.length === 0) {
+          showToast("Nenhuma nota privada nova encontrada.", "info");
+          return { notesProcessedCount, notesFailedCount };
+        }
+
+        const newSecretsToAdd: Record<string, SecretData> = {};
+
+        for (const encNote of encryptedNotesFromRelayer) {
+          const decryptedNoteData = decryptSealedBoxData(encNote.encryptedData);
+
+          if (decryptedNoteData) {
+            // Verificar se o commitment bate
+            const noteCommitmentInPayload = (decryptedNoteData as any).commitment;
+            if (noteCommitmentInPayload !== encNote.commitment) {
+              console.error(
+                `[Receiver] Commitment mismatch! Relayer: ${encNote.commitment}, Payload: ${noteCommitmentInPayload}`,
+                decryptedNoteData
+              );
+              showToast(`Erro ao processar nota: commitment não confere (ID: ${encNote.commitment.slice(0,8)})`, "error");
+              notesFailedCount++;
+              continue;
+            }
+            
+            // Garantir que todos os campos esperados pela SecretData estão presentes
+            const { nullifier, secret, amount, tokenSymbol, decimals, converterAddress, commitment } = decryptedNoteData as Omit<SecretData, 'timestamp' | 'spent'>;
+
+            if (!nullifier || !secret || !amount || !tokenSymbol || !decimals || !converterAddress || !commitment) {
+              console.error("[Receiver] Dados decriptados incompletos:", decryptedNoteData);
+              showToast(`Erro ao processar nota: dados incompletos (ID: ${encNote.commitment.slice(0,8)})`, "error");
+              notesFailedCount++;
+              continue;
+            }
+
+            const secretId = `received-${nullifier.slice(0, 8)}-${Date.now()}`;
+            newSecretsToAdd[secretId] = {
+              nullifier,
+              secret,
+              amount,
+              commitment,
+              timestamp: Date.now(),
+              spent: false,
+              tokenSymbol,
+              converterAddress,
+              decimals,
+            };
+            notesProcessedCount++;
+          } else {
+            console.warn(`[Receiver] Falha ao decriptar nota com commitment: ${encNote.commitment}`);
+            showToast(`Falha ao decriptar nota (ID: ${encNote.commitment.slice(0,8)})`, "warning");
+            notesFailedCount++;
+          }
+        }
+
+        if (Object.keys(newSecretsToAdd).length > 0) {
+          setSecretStore((prev) => ({ ...prev, ...newSecretsToAdd }));
+        }
+
+        if (notesProcessedCount > 0) {
+          showToast(`${notesProcessedCount} nova(s) nota(s) privada(s) adicionada(s)!`, "success");
+        }
+        if (notesFailedCount > 0 && notesProcessedCount === 0) {
+          showToast("Falha ao processar todas as notas novas.", "error");
+        } else if (notesFailedCount > 0) {
+          showToast(`${notesFailedCount} nota(s) não puderam ser processadas.`, "warning");
+        }
+
+      } catch (e) {
+        console.error("[Receiver] Erro ao buscar/processar notas:", e);
+        showToast((e as Error).message, "error");
+        throw e; // Re-throw para que o onError do useMutation seja acionado se necessário
+      } finally {
+        setIsFetchingNotes(false);
+      }
+      return { notesProcessedCount, notesFailedCount };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["private-balance", address] });
+      queryClient.invalidateQueries({ queryKey: ["history", address] });
+    },
+    // onError já é tratado no showToast dentro do mutationFn para erros gerais
+  });
+
+  /* ------------------------------------------------------------------
+   * Selectors e retorno
+   * ----------------------------------------------------------------*/
+  const availableSecrets = Object.entries(secretStore)
+    .filter(([, n]) => !n.spent)
+    .map(([id, n]) => ({ id, ...n }));
+
   return {
     privateBalance,
     underlyingToken,
-    availableSecrets: getAvailableSecrets(),
+    availableSecrets,
     shield: shield.mutateAsync,
     privateTransfer: privateTransfer.mutateAsync,
     unshield: unshield.mutateAsync,
-    exportSecrets,
-    importSecrets,
     isShielding,
     isTransferring,
     isUnshielding,
-    isLoading: shield.isPending || privateTransfer.isPending || unshield.isPending,
+    isLoading: shield.isPending || privateTransfer.isPending || unshield.isPending || isFetchingNotes,
     approving: approveTokens.isPending,
-    refetchBalance
-  };
-} 
+    fetchAndProcessEncryptedNotes: fetchAndProcessEncryptedNotes.mutateAsync,
+    isFetchingPrivateNotes: isFetchingNotes,
+  } as const;
+}

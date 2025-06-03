@@ -23,8 +23,16 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: linear-gradient(145deg, #0F1218, #131640);
+  background: linear-gradient(145deg, #0F1218, #131640, #231F52);
+  background-size: 200% 200%;
+  animation: gradientBG 25s ease infinite;
   background-attachment: fixed;
+}
+
+@keyframes gradientBG {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
 }
 
 h1, h2, h3, h4, h5, h6 {

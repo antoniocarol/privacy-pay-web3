@@ -1,0 +1,13 @@
+{
+    "compilerOptions": {
+      "module": "commonjs",            // ← CommonJS
+      "target": "es2020",
+      "moduleResolution": "node",
+      "resolveJsonModule": true,       // permite importar .json
+      "esModuleInterop": true,
+      "strict": true,
+      "outDir": "dist"
+    },
+    "include": ["src"]
+  }
+  

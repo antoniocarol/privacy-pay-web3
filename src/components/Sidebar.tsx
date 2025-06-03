@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom';
 
 export function Sidebar() {
   return (
-    <aside className="h-screen w-16 md:w-64 bg-[#141736] flex flex-col items-center md:items-start py-8 px-2 md:px-6 shadow-lg">
+    <aside className="fixed left-0 bottom-0 md:top-[72px] w-full md:w-[72px] lg:w-[240px] bg-darkblue/80 backdrop-blur-lg border-t md:border-t-0 md:border-r border-white/10 z-[100] flex flex-col h-[72px] md:h-[calc(100vh-72px)]">
       {/* Logo */}
       <div className="flex items-center justify-center md:justify-start w-full mb-10">
         <div className="w-10 h-10 rounded-full bg-gradient-to-r from-primary to-secondary flex items-center justify-center shadow-lg">
@@ -12,7 +12,7 @@ export function Sidebar() {
       </div>
       
       {/* Navegação */}
-      <nav className="flex flex-col w-full space-y-2">
+      <nav className="flex md:flex-col items-center justify-around md:justify-start md:space-y-1 md:p-2 h-full">
         <NavLink to="/" className={({ isActive }) =>
           `flex items-center py-3 px-3 rounded-lg transition-all ${
             isActive 
@@ -46,7 +46,7 @@ export function Sidebar() {
       
       {/* Wallet */}
       <div className="mt-auto w-full flex justify-center md:justify-start px-2">
-        <appkit-button />
+        <w3m-button />
       </div>
     </aside>
   );

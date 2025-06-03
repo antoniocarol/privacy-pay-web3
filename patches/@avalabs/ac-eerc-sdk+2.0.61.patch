@@ -1,0 +1,6 @@
+import { parseUnits, formatUnits } from 'viem';
+import { useContractRead, useContractReads } from 'wagmi';
+import { erc20Abi as erc20ABI } from 'viem';
+import { EERC } from './EERC';
+
+export { erc20ABI, EERC, useContractRead, useContractReads }; 

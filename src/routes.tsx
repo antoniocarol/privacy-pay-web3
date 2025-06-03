@@ -4,7 +4,6 @@ import App from './App';
 
 // Usando lazy loading para componentes de página
 const Dashboard = lazy(() => import('./pages/Dashboard'));
-const PrivacyDashboardComponent = lazy(() => import('./pages/PrivacyDashboard').then(module => ({ default: module.PrivacyDashboard })));
 const AdminPage = lazy(() => import('./pages/Admin').then(module => ({ default: module.Admin })));
 const TransactionHistoryPage = lazy(() => import('./pages/TransactionHistory'));
 
@@ -29,7 +28,7 @@ export const router = createBrowserRouter([
         index: true,
         element: (
           <Suspense fallback={<PageLoader />}>
-            <PrivacyDashboardComponent />
+            <Dashboard />
           </Suspense>
         ),
       },
@@ -38,14 +37,6 @@ export const router = createBrowserRouter([
         element: (
           <Suspense fallback={<PageLoader />}>
             <Dashboard />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'privacy',
-        element: (
-          <Suspense fallback={<PageLoader />}>
-            <PrivacyDashboardComponent />
           </Suspense>
         ),
       },
